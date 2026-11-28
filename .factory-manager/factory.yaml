@@ -1,0 +1,164 @@
+# The default factory a setup factory item starts from: the P1 factory plus the lint, architecture and mutation
+# checks. The Millwright writes the check scripts, sets the zones from the folder structure and sets test-reports.
+version: 1
+
+phases:
+  - { id: shape, name: Shape }
+  - { id: build, name: Build }
+  - { id: review, name: Review }
+  - { id: merge-spec, name: Merge spec }
+  - { id: finish-item, name: Finish item }
+
+zones:
+  specs: ['specs/**']
+  api-tests: ['api/src/test/**']
+  api-source: ['api/src/main/**']
+  api-dependencies: ['api/pom.xml']
+  ui-tests: ['ui/src/**/*.spec.ts']
+  ui-source: { include: ['ui/src/**', 'ui/public/**'], exclude: ['**/*.spec.ts'] }
+  ui-dependencies: ['ui/package.json', 'ui/package-lock.json']
+  decisions: ['docs/adr/**']
+  factory: ['.factory-manager/**']
+  build-and-ci:
+    - '.github/**'
+    - 'api/mvnw'
+    - 'api/mvnw.cmd'
+    - 'api/.mvn/**'
+    - 'api/checkstyle.xml'
+    - 'api/.gitattributes'
+    - 'api/.gitignore'
+    - 'ui/angular.json'
+    - 'ui/tsconfig*.json'
+    - 'ui/eslint.config.js'
+    - 'ui/.dependency-cruiser.cjs'
+    - 'ui/stryker.config.json'
+    - 'ui/stryker-run.mjs'
+    - 'ui/.editorconfig'
+    - 'ui/.prettierrc'
+    - 'ui/.gitignore'
+    - 'ui/.vscode/**'
+  docs: { include: ['docs/**', 'README.md', 'ui/README.md'], exclude: ['docs/adr/**'] }
+
+stations:
+  - id: spec-station
+    name: Spec station
+    kind: agent
+    phase: shape
+    role: spec-station
+    attempts: 3
+    fence:
+      {
+        specs: write,
+        api-tests: read, api-source: read, ui-tests: read, ui-source: read,
+        decisions: read, build-and-ci: read, api-dependencies: read, ui-dependencies: read, docs: read
+      }
+
+  - id: test-writer
+    name: Test-writer
+    kind: agent
+    phase: build
+    role: test-writer
+    attempts: 3
+    fence:
+      {
+        specs: read,
+        api-tests: write, ui-tests: write,
+        decisions: read, build-and-ci: read, api-dependencies: read, ui-dependencies: read, docs: read
+      }
+
+  - id: implementer
+    name: Implementer
+    kind: agent
+    phase: build
+    role: implementer
+    attempts: 3
+    fence:
+      {
+        specs: read,
+        api-tests: read, api-source: write, ui-tests: read, ui-source: write,
+        decisions: read, build-and-ci: read, api-dependencies: read, ui-dependencies: read, docs: read
+      }
+
+  - id: build-and-test
+    name: Build and test
+    kind: check
+    phase: build
+    check: script
+    script: .factory-manager/scripts/build-and-test.sh
+    on_fail: implementer
+
+  - id: lint
+    name: Lint
+    kind: check
+    phase: build
+    check: script
+    script: .factory-manager/scripts/lint.sh
+    on_fail: implementer
+
+  - id: architecture
+    name: Architecture
+    kind: check
+    phase: build
+    check: script
+    script: .factory-manager/scripts/architecture.sh
+    on_fail: implementer
+
+  - id: mutation
+    name: Mutation
+    kind: check
+    phase: build
+    check: script
+    script: .factory-manager/scripts/mutation.sh
+    on_fail: test-writer
+
+  - id: reviewer
+    name: Reviewer
+    kind: agent
+    phase: review
+    role: reviewer
+    attempts: 1
+    fence:
+      {
+        specs: read,
+        api-tests: read, api-source: read, ui-tests: read, ui-source: read,
+        decisions: read, build-and-ci: read, api-dependencies: read, ui-dependencies: read, docs: read
+      }
+    on_fail: implementer
+
+  - id: pr
+    name: PR
+    kind: check
+    phase: merge-spec
+    check: open-pr
+
+  - id: feature-branch-gate
+    name: Feature branch gate
+    kind: merge-gate
+    phase: merge-spec
+    merge-into: feature-branch
+    applies_to: multi-spec
+
+  - id: main-branch-gate
+    name: Main branch gate
+    kind: merge-gate
+    phase: finish-item
+    merge-into: main-line
+
+foreman:
+  role: foreman
+  authority: {} # empty: every kind of maintenance request escalates
+
+maintenance-station:
+  role: maintenance-station
+  attempts: 1
+
+settings:
+  scenario-approval: manual
+  merge-type.feature-branch-gate: squash
+  merge-type.main-branch-gate: squash
+  foreman.loop-limit: 3
+  test-reports: ['api/target/surefire-reports/*.xml', 'ui/test-results/*.xml']
+
+guardrails:
+  fences: on
+  holdout-tests: on
